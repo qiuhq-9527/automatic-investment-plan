@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <title>专业定投收益计算器</title>
+    <!-- TailwindCSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vue3 CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- Lucide Icons -->
+    <script type="module" src="https://cdn.jsdelivr.net/npm/lucide@0.263.0/dist/lucide.esm.js"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body class="bg-white text-gray-800">
+    <div id="app" class="max-w-5xl mx-auto p-6 space-y-6">
+
+        <!-- 模式切换 -->
+        <div class="flex items-center gap-4">
+            <button @click="mode='simple'" :class="mode==='simple'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
+                class="px-4 py-2 rounded">简单模式</button>
+            <button @click="mode='advanced'"
+                :class="mode==='advanced'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
+                class="px-4 py-2 rounded">高级模式</button>
+        </div>
+
+        <!-- 基础参数输入 -->
+        <div class="grid grid-cols-5 gap-4 items-end">
+            <div>
+                <label class="block mb-1">年化收益率（%）</label>
+                <input type="number" v-model.number="annualRate" min="0" max="100" class="border p-2 w-full rounded">
+            </div>
+            <div>
+                <label class="block mb-1">投资年限（年）</label>
+                <input type="number" v-model.number="years" min="1" max="50" class="border p-2 w-full rounded">
+            </div>
+            <div>
+                <label class="block mb-1">每月定投最大金额（元）</label>
+                <input type="number" v-model.number="maxMonthly" min="0" class="border p-2 w-full rounded">
+            </div>
+            <div>
+                <label class="block mb-1">定投递增跨度（元）</label>
+                <input type="number" v-model.number="yearlyIncrement" min="0" class="border p-2 w-full rounded">
+            </div>
+            <div>
+                <button @click="applySettings" class="bg-gray-900 text-white w-full py-2 rounded">应用</button>
+            </div>
+        </div>
+
+        <!-- 年度投资计划表格（高级模式） -->
+        <div v-if="mode==='advanced'" class="overflow-x-auto">
+            <table class="min-w-full border border-gray-300 rounded">
+                <thead class="bg-gray-100">
+                    <tr>
+                        <th class="border p-2">年份</th>
+                        <th class="border p-2">当年定投金额（元/月）</th>
+                        <th class="border p-2">当年取款金额（元）</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="(plan,index) in investmentPlan" :key="index">
+                        <td class="border p-2 text-center">{{ index+1 }}</td>
+                        <td class="border p-2">
+                            <input type="number" v-model.number="plan.invest" :max="maxMonthly" min="0"
+                                class="border p-1 w-full rounded">
+                        </td>
+                        <td class="border p-2">
+                            <input type="number" v-model.number="plan.withdraw" :max="planTotal(index)" min="0"
+                                class="border p-1 w-full rounded">
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 计算按钮 -->
+        <div>
+            <button @click="calculate" class="bg-gray-900 text-white px-6 py-2 rounded mt-4">计算收益</button>
+        </div>
+
+        <!-- 核心结果指标 -->
+        <div v-if="calculated" class="grid grid-cols-2 gap-4 mt-6">
+            <div class="border p-4 rounded bg-gray-50">
+                <h3 class="font-bold mb-2">核心指标</h3>
+                <table class="w-full text-left">
+                    <tr>
+                        <td>累计投入本金：</td>
+                        <td>¥{{ totalInvested.toLocaleString() }}</td>
+                    </tr>
+                    <tr>
+                        <td>累计取出金额：</td>
+                        <td>¥{{ totalWithdrawn.toLocaleString() }}</td>
+                    </tr>
+                    <tr>
+                        <td>累计投资收益：</td>
+                        <td>¥{{ totalProfit.toLocaleString() }}</td>
+                    </tr>
+                    <tr>
+                        <td>最终总资产：</td>
+                        <td>¥{{ finalAsset.toLocaleString() }}</td>
+                    </tr>
+                    <tr>
+                        <td>时间加权收益率（TWR）：</td>
+                        <td>{{ twr.toFixed(2) }}%</td>
+                    </tr>
+                    <tr>
+                        <td>资金加权收益率（MWR/IRR）：</td>
+                        <td>{{ mwr.toFixed(2) }}%</td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- 折线图 -->
+            <div class="border p-4 rounded bg-gray-50">
+                <canvas id="chart"></canvas>
+            </div>
+        </div>
+
+        <!-- 年度操作影响分解表 -->
+        <div v-if="calculated && mode==='advanced'" class="overflow-x-auto border rounded p-4 bg-gray-50">
+            <h3 class="font-bold mb-2">年度操作影响分解表</h3>
+            <table class="min-w-full">
+                <thead class="bg-gray-100">
+                    <tr>
+                        <th class="border p-2">年份</th>
+                        <th class="border p-2">年末操作净额（定投-取款）</th>
+                        <th class="border p-2">对最终资产贡献</th>
+                        <th class="border p-2">产生的额外收益</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="(year,index) in yearImpact" :key="index">
+                        <td class="border p-2 text-center">{{ index+1 }}</td>
+                        <td class="border p-2">¥{{ year.net.toLocaleString() }}</td>
+                        <td class="border p-2">¥{{ year.assetImpact.toLocaleString() }}</td>
+                        <td class="border p-2">¥{{ year.extraProfit.toLocaleString() }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    mode: 'advanced', // simple or advanced
+                    annualRate: 8,
+                    years: 10,
+                    maxMonthly: 6500,
+                    yearlyIncrement: 1000,
+                    investmentPlan: [],
+                    calculated: false,
+                    totalInvested: 0,
+                    totalWithdrawn: 0,
+                    totalProfit: 0,
+                    finalAsset: 0,
+                    twr: 0,
+                    mwr: 0,
+                    yearImpact: []
+                };
+            },
+            created() {
+                this.initPlan();
+            },
+            methods: {
+                applySettings() {
+                    this.initPlan();
+                    this.calculate();
+                },
+                initPlan() {
+                    this.investmentPlan = Array.from({ length: this.years }, (_, i) => ({
+                        invest: i < 5 ? 4000 + i * this.yearlyIncrement : this.maxMonthly,
+                        withdraw: 0
+                    }));
+                },
+                planTotal(index) {
+                    let total = 0;
+                    for (let i = 0; i <= index; i++) {
+                        total += this.investmentPlan[i].invest * 12;
+                    }
+                    return total;
+                },
+                calculate() {
+                    const monthlyRate = this.annualRate / 100 / 12;
+                    let cumulative = 0;
+                    let cumulativeProfit = 0;
+                    let cashFlows = [];
+                    this.yearImpact = [];
+
+                    if (this.mode === 'simple') {
+                        const monthly = this.maxMonthly;
+                        for (let i = 0; i < this.years; i++) {
+                            for (let m = 0; m < 12; m++) {
+                                cumulative = cumulative * (1 + monthlyRate) + monthly;
+                            }
+                        }
+                        this.totalInvested = monthly * 12 * this.years;
+                        this.totalWithdrawn = 0;
+                        this.finalAsset = cumulative;
+                        this.totalProfit = this.finalAsset - this.totalInvested;
+                        this.twr = this.annualRate;
+                        this.mwr = this.annualRate;
+                        this.yearImpact = Array.from({ length: this.years }, () => ({ net: 0, assetImpact: 0, extraProfit: 0 }));
+                    } else {
+                        let totalAsset = 0;
+                        for (let i = 0; i < this.years; i++) {
+                            const plan = this.investmentPlan[i];
+                            const investYear = plan.invest * 12;
+                            const withdrawYear = plan.withdraw;
+
+                            // 年末净操作
+                            const net = investYear - withdrawYear;
+
+                            // 每年复利计算（逐月）
+                            let asset = totalAsset;
+                            for (let m = 0; m < 12; m++) {
+                                asset = asset * (1 + monthlyRate) + plan.invest;
+                            }
+                            asset -= withdrawYear;
+
+                            // 计算年度额外收益：资产增值 - 年净投入
+                            const extraProfit = asset - totalAsset - net;
+
+                            // 更新累计变量
+                            totalAsset = asset;
+                            cumulativeProfit += extraProfit;
+
+                            // 记录年度分解
+                            this.yearImpact.push({
+                                net,
+                                assetImpact: net + extraProfit,
+                                extraProfit
+                            });
+
+                            // 记录现金流（每年年初负投资额，年底正取款）
+                            cashFlows.push(-investYear);
+                            if (withdrawYear > 0) cashFlows.push(withdrawYear);
+                        }
+
+                        this.totalInvested = this.investmentPlan.reduce((sum, p) => sum + p.invest * 12, 0);
+                        this.totalWithdrawn = this.investmentPlan.reduce((sum, p) => sum + p.withdraw, 0);
+                        this.finalAsset = totalAsset;
+                        this.totalProfit = this.finalAsset - this.totalInvested + this.totalWithdrawn;
+
+                        // TWR: 使用年化收益率近似（简化）
+                        this.twr = this.annualRate;
+
+                        // MWR/IRR: 简单实现，按年度现金流IRR近似
+                        this.mwr = this.calculateIRR(cashFlows) * 100;
+                    }
+
+                    this.calculated = true;
+                    this.$nextTick(() => {
+                        this.renderChart();
+                    });
+                },
+                    calculateIRR(cashFlows, guess = 0.1){
+                        // 使用牛顿法求IRR
+                        let rate = guess;
+                        for (let i = 0; i < 100; i++) {
+                            let npv = 0;
+                            let dnpv = 0;
+                            for (let t = 0; t < cashFlows.length; t++) {
+                                npv += cashFlows[t] / Math.pow(1 + rate, t + 1);
+                                dnpv -= (t + 1) * cashFlows[t] / Math.pow(1 + rate, t + 2);
+                            }
+                            const newRate = rate - npv / dnpv;
+                            if (Math.abs(newRate - rate) < 1e-6) return newRate;
+                            rate = newRate;
+                        }
+                        return rate;
+                    },
+                    renderChart(){
+                        const labels = Array.from({ length: this.years }, (_, i) => `第${i + 1}年`);
+                        const profitData = this.yearImpact.map(y => y.extraProfit);
+                        const totalData = [];
+                        let acc = 0;
+                        for (let i = 0; i < this.years; i++) {
+                            acc += this.yearImpact[i].assetImpact;
+                            totalData.push(acc);
+                        }
+
+                        const ctx = document.getElementById('chart').getContext('2d');
+                        if (this.chart) this.chart.destroy();
+                        this.chart = new Chart(ctx, {
+                            type: 'line',
+                            data: {
+                                labels,
+                                datasets: [
+                                    { label: '年度额外收益', data: profitData, borderColor: 'blue', backgroundColor: 'rgba(0,0,255,0.1)', tension: 0.3 },
+                                    { label: '总资产', data: totalData, borderColor: 'purple', backgroundColor: 'rgba(128,0,128,0.1)', tension: 0.3 }
+                                ]
+                            },
+                            options: {
+                                responsive: true,
+                                plugins: {
+                                    legend: { position: 'top' }
+                                },
+                                scales: {
+                                    y: { beginAtZero: true }
+                                }
+                            }
+                        });
+                    }
+                }
+            }).mount('#app');
+    </script>
+</body>
+
+</html>
