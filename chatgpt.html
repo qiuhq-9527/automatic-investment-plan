@@ -12,6 +12,8 @@
     <script type="module" src="https://cdn.jsdelivr.net/npm/lucide@0.263.0/dist/lucide.esm.js"></script>
     <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 核心标准算法与波动率模拟 -->
+    <script src="./calculator.js"></script>
 </head>
 
 <body class="bg-white text-gray-800">
@@ -27,10 +29,14 @@
         </div>
 
         <!-- 基础参数输入 -->
-        <div class="grid grid-cols-3 gap-4 items-end">
+        <div class="grid grid-cols-4 gap-4 items-end">
             <div>
                 <label class="block mb-1">年化收益率（%）</label>
                 <input type="number" v-model.number="annualRate" min="0" max="100" class="border p-2 w-full rounded">
+            </div>
+            <div>
+                <label class="block mb-1">年化波动率（%）</label>
+                <input type="number" v-model.number="annualVolatility" min="0" max="100" class="border p-2 w-full rounded">
             </div>
             <div>
                 <label class="block mb-1">投资年限（年）</label>
@@ -48,8 +54,8 @@
                 <label class="block mb-1">定投递增跨度（元）</label>
                 <input type="number" v-model.number="yearlyIncrement" min="0" class="border p-2 w-full rounded">
             </div>
-            <div>
-                <button @click="applySettings" class="bg-gray-900 text-white w-full py-2 rounded">应用</button>
+            <div class="col-span-2">
+                <button @click="applySettings" class="bg-gray-900 text-white w-full py-2 rounded">应用（生成随机真实路径）</button>
             </div>
         </div>
 
@@ -155,6 +161,7 @@
                 return {
                     mode: 'advanced', // simple or advanced
                     annualRate: 8,
+                    annualVolatility: 15,
                     years: 10,
                     maxMonthly: 6500,
                     firstYearAmount: 4000,
@@ -192,95 +199,35 @@
                     return total;
                 },
                 calculate() {
-                    const monthlyRate = this.annualRate / 100 / 12;
-                    let cumulative = 0;
-                    let cumulativeProfit = 0;
-                    let cashFlows = [];
-                    this.yearImpact = [];
-
+                    let planToSimulate = [];
                     if (this.mode === 'simple') {
-                        const monthly = this.maxMonthly;
-                        for (let i = 0; i < this.years; i++) {
-                            for (let m = 0; m < 12; m++) {
-                                cumulative = cumulative * (1 + monthlyRate) + monthly;
-                            }
-                        }
-                        this.totalInvested = monthly * 12 * this.years;
-                        this.totalWithdrawn = 0;
-                        this.finalAsset = cumulative;
-                        this.totalProfit = this.finalAsset - this.totalInvested;
-                        this.twr = this.annualRate;
-                        this.mwr = this.annualRate;
-                        this.yearImpact = Array.from({ length: this.years }, () => ({ net: 0, assetImpact: 0, extraProfit: 0 }));
+                        planToSimulate = Array.from({ length: this.years }, () => ({
+                            invest: this.maxMonthly,
+                            withdraw: 0
+                        }));
                     } else {
-                        let totalAsset = 0;
-                        for (let i = 0; i < this.years; i++) {
-                            const plan = this.investmentPlan[i];
-                            const investYear = plan.invest * 12;
-                            const withdrawYear = plan.withdraw;
-
-                            // 年末净操作
-                            const net = investYear - withdrawYear;
-
-                            // 每年复利计算（逐月）
-                            let asset = totalAsset;
-                            for (let m = 0; m < 12; m++) {
-                                asset = asset * (1 + monthlyRate) + plan.invest;
-                            }
-                            asset -= withdrawYear;
-
-                            // 计算年度额外收益：资产增值 - 年净投入
-                            const extraProfit = asset - totalAsset - net;
-
-                            // 更新累计变量
-                            totalAsset = asset;
-                            cumulativeProfit += extraProfit;
-
-                            // 记录年度分解
-                            this.yearImpact.push({
-                                net,
-                                assetImpact: net + extraProfit,
-                                extraProfit
-                            });
-
-                            // 记录现金流（每年年初负投资额，年底正取款）
-                            cashFlows.push(-investYear);
-                            if (withdrawYear > 0) cashFlows.push(withdrawYear);
-                        }
-
-                        this.totalInvested = this.investmentPlan.reduce((sum, p) => sum + p.invest * 12, 0);
-                        this.totalWithdrawn = this.investmentPlan.reduce((sum, p) => sum + p.withdraw, 0);
-                        this.finalAsset = totalAsset;
-                        this.totalProfit = this.finalAsset - this.totalInvested + this.totalWithdrawn;
-
-                        // TWR: 使用年化收益率近似（简化）
-                        this.twr = this.annualRate;
-
-                        // MWR/IRR: 简单实现，按年度现金流IRR近似
-                        this.mwr = this.calculateIRR(cashFlows) * 100;
+                        planToSimulate = this.investmentPlan;
                     }
+
+                    const result = window.Calculator.simulateInvestment(
+                        planToSimulate, 
+                        this.annualRate, 
+                        this.annualVolatility
+                    );
+
+                    this.totalInvested = result.totalInvested;
+                    this.totalWithdrawn = result.totalWithdrawn;
+                    this.totalProfit = result.totalProfit;
+                    this.finalAsset = result.finalAsset;
+                    this.twr = result.twr;
+                    this.mwr = result.mwr;
+                    this.yearImpact = result.yearImpact;
 
                     this.calculated = true;
                     this.$nextTick(() => {
                         this.renderChart();
                     });
                 },
-                    calculateIRR(cashFlows, guess = 0.1){
-                        // 使用牛顿法求IRR
-                        let rate = guess;
-                        for (let i = 0; i < 100; i++) {
-                            let npv = 0;
-                            let dnpv = 0;
-                            for (let t = 0; t < cashFlows.length; t++) {
-                                npv += cashFlows[t] / Math.pow(1 + rate, t + 1);
-                                dnpv -= (t + 1) * cashFlows[t] / Math.pow(1 + rate, t + 2);
-                            }
-                            const newRate = rate - npv / dnpv;
-                            if (Math.abs(newRate - rate) < 1e-6) return newRate;
-                            rate = newRate;
-                        }
-                        return rate;
-                    },
                     renderChart(){
                         const labels = Array.from({ length: this.years }, (_, i) => `第${i + 1}年`);
                         const profitData = this.yearImpact.map(y => y.extraProfit);
