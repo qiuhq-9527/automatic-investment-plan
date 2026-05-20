@@ -36,6 +36,9 @@
             <button @click="mode='sim2'"
                 :class="mode==='sim2'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
                 class="px-4 py-2 rounded">仿真模式2</button>
+            <button @click="mode='sim3'"
+                :class="mode==='sim3'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
+                class="px-4 py-2 rounded">仿真模式3</button>
         </div>
 
         <!-- 基础参数输入 -->
@@ -44,17 +47,33 @@
                 <label class="block mb-1">年化收益率（%）</label>
                 <input type="number" v-model.number="annualRate" min="0" max="100" class="border p-2 w-full rounded">
             </div>
-            <div v-if="mode === 'sim1' || mode === 'sim2'">
+            <div v-if="mode === 'sim1' || mode === 'sim2' || mode === 'sim3'">
                 <label class="block mb-1">年化波动率（%）</label>
                 <input type="number" v-model.number="annualVolatility" min="0" max="100" class="border p-2 w-full rounded">
             </div>
-            <div v-if="mode === 'sim2'">
+            <div v-if="mode === 'sim2' || mode === 'sim3'">
                 <label class="block mb-1">预计通货膨胀率（%）</label>
                 <input type="number" v-model.number="inflationRate" min="0" max="100" class="border p-2 w-full rounded">
             </div>
-            <div v-if="mode === 'sim2'">
+            <div v-if="mode === 'sim2' || mode === 'sim3'">
                 <label class="block mb-1">管理费率（%）</label>
                 <input type="number" v-model.number="managementFee" min="0" max="100" class="border p-2 w-full rounded">
+            </div>
+            <div v-if="mode === 'sim3'">
+                <label class="block mb-1">情绪化交易系数（1-10）</label>
+                <input type="number" v-model.number="behaviorFactor" min="0" max="10" class="border p-2 w-full rounded">
+            </div>
+            <div v-if="mode === 'sim3'">
+                <label class="block mb-1">交易手续费率（%）</label>
+                <input type="number" v-model.number="tradingFee" min="0" max="10" step="0.01" class="border p-2 w-full rounded">
+            </div>
+            <div v-if="mode === 'sim3'">
+                <label class="block mb-1">黑天鹅发生概率（%/年）</label>
+                <input type="number" v-model.number="blackSwanProb" min="0" max="100" class="border p-2 w-full rounded">
+            </div>
+            <div v-if="mode === 'sim3'">
+                <label class="block mb-1">资本利得税率（%）</label>
+                <input type="number" v-model.number="capitalGainsTax" min="0" max="100" class="border p-2 w-full rounded">
             </div>
             <div>
                 <label class="block mb-1">投资年限（年）</label>
@@ -137,9 +156,13 @@
                         <td>资金加权收益率（MWR/IRR）：</td>
                         <td>{{ mwr.toFixed(2) }}%</td>
                     </tr>
-                    <tr v-if="mode === 'sim2'">
+                    <tr v-if="mode === 'sim2' || mode === 'sim3'">
                         <td>通胀调整后购买力：</td>
                         <td>¥{{ realPurchasingPower.toLocaleString() }}</td>
+                    </tr>
+                    <tr v-if="mode === 'sim3'">
+                        <td>税后最终净收益：</td>
+                        <td>¥{{ afterTaxProfit.toLocaleString() }}</td>
                     </tr>
                 </table>
             </div>
@@ -181,11 +204,15 @@
         createApp({
             data() {
                 return {
-                    mode: 'advanced', // simple, advanced, sim1, sim2
+                    mode: 'advanced', // simple, advanced, sim1, sim2, sim3
                     annualRate: 8,
                     annualVolatility: 15,
                     inflationRate: 3,
                     managementFee: 1,
+                    behaviorFactor: 5,
+                    tradingFee: 0.15,
+                    blackSwanProb: 1.0,
+                    capitalGainsTax: 20,
                     years: 10,
                     maxMonthly: 6500,
                     firstYearAmount: 4000,
@@ -199,7 +226,8 @@
                     twr: 0,
                     mwr: 0,
                     yearImpact: [],
-                    realPurchasingPower: 0
+                    realPurchasingPower: 0,
+                    afterTaxProfit: 0
                 };
             },
             created() {
@@ -235,8 +263,8 @@
                     }
 
                     let result;
-                    if (this.mode === 'sim2') {
-                        result = this.simulateWithCDN(planToSimulate);
+                    if (this.mode === 'sim2' || this.mode === 'sim3') {
+                        result = this.simulateWithCDN(planToSimulate, this.mode === 'sim3');
                     } else {
                         const vol = this.mode === 'sim1' ? this.annualVolatility : 0;
                         result = window.Calculator.simulateInvestment(
@@ -255,13 +283,14 @@
                     this.mwr = result.mwr;
                     this.yearImpact = result.yearImpact;
                     this.realPurchasingPower = result.realPurchasingPower;
+                    this.afterTaxProfit = result.afterTaxProfit || 0;
 
                     this.calculated = true;
                     this.$nextTick(() => {
                         this.renderChart();
                     });
                 },
-                simulateWithCDN(plan) {
+                simulateWithCDN(plan, isSim3 = false) {
                     const finance = new Finance();
                     const rateDec = this.annualRate / 100;
                     const volDec = this.annualVolatility / 100;
@@ -272,33 +301,77 @@
                     const monthlyVolatility = volDec / Math.sqrt(12);
                     const monthlyFee = feeDec / 12;
 
+                    const bFactor = this.behaviorFactor;
+                    const greedMultiplier = bFactor; 
+                    const fearMultiplier = bFactor * 2; 
+                    const panicThreshold = -0.05; 
+                    const panicSellRate = (bFactor / 10) * 0.1; 
+
+                    const tFee = this.tradingFee / 100;
+                    const bsProb = this.blackSwanProb / 100 / 12; 
+                    const cgTax = this.capitalGainsTax / 100;
+
                     let totalAsset = 0;
                     let cashFlows = [];
                     const yearImpact = [];
                     let twrFactor = 1.0;
+                    let prevMonthReturn = 0;
 
                     for (let i = 0; i < plan.length; i++) {
-                        const monthlyInvest = plan[i].invest;
+                        const baseMonthlyInvest = plan[i].invest;
                         const withdrawYear = plan[i].withdraw;
                         
                         let asset = totalAsset;
                         const startOfYearAsset = asset;
+                        let yearlyActualInvest = 0;
 
                         for (let m = 0; m < 12; m++) {
                             let actualMonthlyRate = monthlyExpectedReturn;
-                            if (volDec > 0 && typeof jStat !== 'undefined') {
+                            
+                            if (isSim3 && Math.random() < bsProb) {
+                                actualMonthlyRate = -0.20 + (Math.random() * 0.05);
+                            } else if (volDec > 0 && typeof jStat !== 'undefined') {
                                 actualMonthlyRate = jStat.normal.sample(monthlyExpectedReturn, monthlyVolatility);
                             }
                             
                             actualMonthlyRate -= monthlyFee;
 
+                            let currentInvest = baseMonthlyInvest;
+                            if (isSim3) {
+                                if (prevMonthReturn > 0) {
+                                    currentInvest *= (1 + prevMonthReturn * greedMultiplier);
+                                } else if (prevMonthReturn < 0) {
+                                    currentInvest *= (1 + prevMonthReturn * fearMultiplier);
+                                    if (currentInvest < 0) currentInvest = 0;
+                                }
+                                currentInvest = Math.min(currentInvest, baseMonthlyInvest * 2);
+                            }
+
+                            asset = asset * (1 + actualMonthlyRate);
                             twrFactor *= (1 + actualMonthlyRate);
-                            asset = asset * (1 + actualMonthlyRate) + monthlyInvest;
+                            
+                            let feeIncurred = 0;
+                            if (isSim3 && currentInvest > 0) {
+                                feeIncurred += currentInvest * tFee;
+                                asset += (currentInvest - feeIncurred);
+                            } else {
+                                asset += currentInvest;
+                            }
+                            yearlyActualInvest += currentInvest;
+
+                            if (isSim3 && prevMonthReturn < panicThreshold && asset > 0) {
+                                const sellAmount = asset * panicSellRate;
+                                asset -= sellAmount;
+                                feeIncurred += sellAmount * tFee;
+                                yearlyActualInvest -= (sellAmount - feeIncurred);
+                            }
+
+                            prevMonthReturn = actualMonthlyRate;
                         }
 
                         asset -= withdrawYear;
 
-                        const net = monthlyInvest * 12 - withdrawYear;
+                        const net = yearlyActualInvest - withdrawYear;
                         const extraProfit = asset - startOfYearAsset - net;
 
                         yearImpact.push({
@@ -307,7 +380,7 @@
                             extraProfit: extraProfit
                         });
 
-                        cashFlows.push(-(monthlyInvest * 12));
+                        cashFlows.push(-yearlyActualInvest);
                         if (withdrawYear > 0) cashFlows.push(withdrawYear);
 
                         totalAsset = asset;
@@ -328,10 +401,15 @@
                         mwr = 0;
                     }
 
-                    const totalInvested = plan.reduce((sum, p) => sum + p.invest * 12, 0);
-                    const totalWithdrawn = plan.reduce((sum, p) => sum + p.withdraw, 0);
+                    const totalInvested = -cashFlows.filter(c => c < 0).reduce((sum, c) => sum + c, 0);
+                    const totalWithdrawn = cashFlows.filter(c => c > 0).reduce((sum, c) => sum + c, 0);
                     const realAsset = totalAsset / Math.pow(1 + inflationDec, years);
                     const totalProfit = totalAsset - totalInvested + totalWithdrawn;
+                    
+                    let afterTaxProfit = totalProfit;
+                    if (isSim3 && totalProfit > 0) {
+                        afterTaxProfit = totalProfit * (1 - cgTax);
+                    }
 
                     return {
                         totalInvested,
@@ -341,7 +419,8 @@
                         yearImpact: yearImpact,
                         twr: annualizedTWR,
                         mwr: mwr || 0,
-                        realPurchasingPower: realAsset
+                        realPurchasingPower: realAsset,
+                        afterTaxProfit
                     };
                 },
                     renderChart(){
