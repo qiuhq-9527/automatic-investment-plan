@@ -27,7 +27,7 @@
         </div>
 
         <!-- 基础参数输入 -->
-        <div class="grid grid-cols-5 gap-4 items-end">
+        <div class="grid grid-cols-3 gap-4 items-end">
             <div>
                 <label class="block mb-1">年化收益率（%）</label>
                 <input type="number" v-model.number="annualRate" min="0" max="100" class="border p-2 w-full rounded">
@@ -39,6 +39,10 @@
             <div>
                 <label class="block mb-1">每月定投最大金额（元）</label>
                 <input type="number" v-model.number="maxMonthly" min="0" class="border p-2 w-full rounded">
+            </div>
+            <div>
+                <label class="block mb-1">首年定投金额（元）</label>
+                <input type="number" v-model.number="firstYearAmount" min="0" class="border p-2 w-full rounded">
             </div>
             <div>
                 <label class="block mb-1">定投递增跨度（元）</label>
@@ -153,6 +157,7 @@
                     annualRate: 8,
                     years: 10,
                     maxMonthly: 6500,
+                    firstYearAmount: 4000,
                     yearlyIncrement: 1000,
                     investmentPlan: [],
                     calculated: false,
@@ -175,7 +180,7 @@
                 },
                 initPlan() {
                     this.investmentPlan = Array.from({ length: this.years }, (_, i) => ({
-                        invest: i < 5 ? 4000 + i * this.yearlyIncrement : this.maxMonthly,
+                        invest: Math.min(this.firstYearAmount + i * this.yearlyIncrement, this.maxMonthly),
                         withdraw: 0
                     }));
                 },
