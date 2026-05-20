@@ -14,6 +14,10 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- 核心标准算法与波动率模拟 -->
     <script src="./calculator.js"></script>
+    <!-- jStat CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/jstat@1.9.6/dist/jstat.min.js"></script>
+    <!-- Finance.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/financejs@4.1.0/finance.min.js"></script>
 </head>
 
 <body class="bg-white text-gray-800">
@@ -26,6 +30,12 @@
             <button @click="mode='advanced'"
                 :class="mode==='advanced'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
                 class="px-4 py-2 rounded">高级模式</button>
+            <button @click="mode='sim1'"
+                :class="mode==='sim1'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
+                class="px-4 py-2 rounded">仿真模式1</button>
+            <button @click="mode='sim2'"
+                :class="mode==='sim2'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
+                class="px-4 py-2 rounded">仿真模式2</button>
         </div>
 
         <!-- 基础参数输入 -->
@@ -34,9 +44,17 @@
                 <label class="block mb-1">年化收益率（%）</label>
                 <input type="number" v-model.number="annualRate" min="0" max="100" class="border p-2 w-full rounded">
             </div>
-            <div>
+            <div v-if="mode === 'sim1' || mode === 'sim2'">
                 <label class="block mb-1">年化波动率（%）</label>
                 <input type="number" v-model.number="annualVolatility" min="0" max="100" class="border p-2 w-full rounded">
+            </div>
+            <div v-if="mode === 'sim2'">
+                <label class="block mb-1">预计通货膨胀率（%）</label>
+                <input type="number" v-model.number="inflationRate" min="0" max="100" class="border p-2 w-full rounded">
+            </div>
+            <div v-if="mode === 'sim2'">
+                <label class="block mb-1">管理费率（%）</label>
+                <input type="number" v-model.number="managementFee" min="0" max="100" class="border p-2 w-full rounded">
             </div>
             <div>
                 <label class="block mb-1">投资年限（年）</label>
@@ -54,13 +72,13 @@
                 <label class="block mb-1">定投递增跨度（元）</label>
                 <input type="number" v-model.number="yearlyIncrement" min="0" class="border p-2 w-full rounded">
             </div>
-            <div class="col-span-2">
-                <button @click="applySettings" class="bg-gray-900 text-white w-full py-2 rounded">应用（生成随机真实路径）</button>
+            <div class="col-span-4">
+                <button @click="applySettings" class="bg-gray-900 text-white w-full py-2 rounded">{{ mode.startsWith('sim') ? '应用（生成随机真实路径）' : '应用' }}</button>
             </div>
         </div>
 
         <!-- 年度投资计划表格（高级模式） -->
-        <div v-if="mode==='advanced'" class="overflow-x-auto">
+        <div v-if="mode !== 'simple'" class="overflow-x-auto">
             <table class="min-w-full border border-gray-300 rounded">
                 <thead class="bg-gray-100">
                     <tr>
@@ -119,6 +137,10 @@
                         <td>资金加权收益率（MWR/IRR）：</td>
                         <td>{{ mwr.toFixed(2) }}%</td>
                     </tr>
+                    <tr v-if="mode === 'sim2'">
+                        <td>通胀调整后购买力：</td>
+                        <td>¥{{ realPurchasingPower.toLocaleString() }}</td>
+                    </tr>
                 </table>
             </div>
 
@@ -129,7 +151,7 @@
         </div>
 
         <!-- 年度操作影响分解表 -->
-        <div v-if="calculated && mode==='advanced'" class="overflow-x-auto border rounded p-4 bg-gray-50">
+        <div v-if="calculated && mode !== 'simple'" class="overflow-x-auto border rounded p-4 bg-gray-50">
             <h3 class="font-bold mb-2">年度操作影响分解表</h3>
             <table class="min-w-full">
                 <thead class="bg-gray-100">
@@ -159,9 +181,11 @@
         createApp({
             data() {
                 return {
-                    mode: 'advanced', // simple or advanced
+                    mode: 'advanced', // simple, advanced, sim1, sim2
                     annualRate: 8,
                     annualVolatility: 15,
+                    inflationRate: 3,
+                    managementFee: 1,
                     years: 10,
                     maxMonthly: 6500,
                     firstYearAmount: 4000,
@@ -174,7 +198,8 @@
                     finalAsset: 0,
                     twr: 0,
                     mwr: 0,
-                    yearImpact: []
+                    yearImpact: [],
+                    realPurchasingPower: 0
                 };
             },
             created() {
@@ -209,11 +234,18 @@
                         planToSimulate = this.investmentPlan;
                     }
 
-                    const result = window.Calculator.simulateInvestment(
-                        planToSimulate, 
-                        this.annualRate, 
-                        this.annualVolatility
-                    );
+                    let result;
+                    if (this.mode === 'sim2') {
+                        result = this.simulateWithCDN(planToSimulate);
+                    } else {
+                        const vol = this.mode === 'sim1' ? this.annualVolatility : 0;
+                        result = window.Calculator.simulateInvestment(
+                            planToSimulate, 
+                            this.annualRate, 
+                            vol
+                        );
+                        result.realPurchasingPower = 0;
+                    }
 
                     this.totalInvested = result.totalInvested;
                     this.totalWithdrawn = result.totalWithdrawn;
@@ -222,11 +254,95 @@
                     this.twr = result.twr;
                     this.mwr = result.mwr;
                     this.yearImpact = result.yearImpact;
+                    this.realPurchasingPower = result.realPurchasingPower;
 
                     this.calculated = true;
                     this.$nextTick(() => {
                         this.renderChart();
                     });
+                },
+                simulateWithCDN(plan) {
+                    const finance = new Finance();
+                    const rateDec = this.annualRate / 100;
+                    const volDec = this.annualVolatility / 100;
+                    const inflationDec = this.inflationRate / 100;
+                    const feeDec = this.managementFee / 100;
+
+                    const monthlyExpectedReturn = rateDec / 12;
+                    const monthlyVolatility = volDec / Math.sqrt(12);
+                    const monthlyFee = feeDec / 12;
+
+                    let totalAsset = 0;
+                    let cashFlows = [];
+                    const yearImpact = [];
+                    let twrFactor = 1.0;
+
+                    for (let i = 0; i < plan.length; i++) {
+                        const monthlyInvest = plan[i].invest;
+                        const withdrawYear = plan[i].withdraw;
+                        
+                        let asset = totalAsset;
+                        const startOfYearAsset = asset;
+
+                        for (let m = 0; m < 12; m++) {
+                            let actualMonthlyRate = monthlyExpectedReturn;
+                            if (volDec > 0 && typeof jStat !== 'undefined') {
+                                actualMonthlyRate = jStat.normal.sample(monthlyExpectedReturn, monthlyVolatility);
+                            }
+                            
+                            actualMonthlyRate -= monthlyFee;
+
+                            twrFactor *= (1 + actualMonthlyRate);
+                            asset = asset * (1 + actualMonthlyRate) + monthlyInvest;
+                        }
+
+                        asset -= withdrawYear;
+
+                        const net = monthlyInvest * 12 - withdrawYear;
+                        const extraProfit = asset - startOfYearAsset - net;
+
+                        yearImpact.push({
+                            net: net,
+                            assetImpact: net + extraProfit,
+                            extraProfit: extraProfit
+                        });
+
+                        cashFlows.push(-(monthlyInvest * 12));
+                        if (withdrawYear > 0) cashFlows.push(withdrawYear);
+
+                        totalAsset = asset;
+                    }
+
+                    const years = plan.length;
+                    let annualizedTWR = 0;
+                    if (years > 0) {
+                         annualizedTWR = (Math.pow(twrFactor, 1 / years) - 1) * 100;
+                    }
+
+                    let mwr = 0;
+                    try {
+                        const irrCashFlows = [...cashFlows, totalAsset];
+                        const initial = irrCashFlows.shift(); 
+                        mwr = finance.IRR(initial, ...irrCashFlows);
+                    } catch (e) {
+                        mwr = 0;
+                    }
+
+                    const totalInvested = plan.reduce((sum, p) => sum + p.invest * 12, 0);
+                    const totalWithdrawn = plan.reduce((sum, p) => sum + p.withdraw, 0);
+                    const realAsset = totalAsset / Math.pow(1 + inflationDec, years);
+                    const totalProfit = totalAsset - totalInvested + totalWithdrawn;
+
+                    return {
+                        totalInvested,
+                        totalWithdrawn,
+                        totalProfit,
+                        finalAsset: totalAsset,
+                        yearImpact: yearImpact,
+                        twr: annualizedTWR,
+                        mwr: mwr || 0,
+                        realPurchasingPower: realAsset
+                    };
                 },
                     renderChart(){
                         const labels = Array.from({ length: this.years }, (_, i) => `第${i + 1}年`);
