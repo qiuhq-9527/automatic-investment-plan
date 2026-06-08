@@ -3,460 +3,405 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>专业定投收益计算器</title>
-    <!-- TailwindCSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Vue3 CDN -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <!-- Lucide Icons -->
-    <script type="module" src="https://cdn.jsdelivr.net/npm/lucide@0.263.0/dist/lucide.esm.js"></script>
-    <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- 核心标准算法与波动率模拟 -->
     <script src="./calculator.js"></script>
-    <!-- jStat CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/jstat@1.9.6/dist/jstat.min.js"></script>
-    <!-- Finance.js CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/financejs@4.1.0/finance.min.js"></script>
 </head>
 
-<body class="bg-white text-gray-800">
-    <div id="app" class="max-w-5xl mx-auto p-6 space-y-6">
+<body class="bg-neutral-50 text-neutral-950">
+    <div id="app" class="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-8">
+        <header class="flex flex-col gap-3">
+            <p class="text-sm text-neutral-500">S&P 500 场内定投估算</p>
+            <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                <div>
+                    <h1 class="text-3xl font-semibold tracking-tight">定投收益计算器</h1>
+                    <p class="mt-2 max-w-3xl text-sm leading-6 text-neutral-600">
+                        按月投入、月初买入，管理费按资产年化扣减，场内买入摩擦会降低净买入资产。图表展示月度代表路径，分位数用于判断长期区间。
+                    </p>
+                </div>
+                <div class="flex rounded-xl border border-neutral-200 bg-white p-1">
+                    <button
+                        v-for="item in modes"
+                        :key="item.value"
+                        type="button"
+                        class="rounded-lg px-4 py-2 text-sm transition"
+                        :class="mode === item.value ? 'bg-neutral-950 text-white' : 'text-neutral-600 hover:bg-neutral-100'"
+                        @click="setMode(item.value)"
+                    >
+                        {{ item.label }}
+                    </button>
+                </div>
+            </div>
+        </header>
 
-        <!-- 模式切换 -->
-        <div class="flex items-center gap-4">
-            <button @click="mode='simple'" :class="mode==='simple'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
-                class="px-4 py-2 rounded">简单模式</button>
-            <button @click="mode='advanced'"
-                :class="mode==='advanced'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
-                class="px-4 py-2 rounded">高级模式</button>
-            <button @click="mode='sim1'"
-                :class="mode==='sim1'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
-                class="px-4 py-2 rounded">仿真模式1</button>
-            <button @click="mode='sim2'"
-                :class="mode==='sim2'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
-                class="px-4 py-2 rounded">仿真模式2</button>
-            <button @click="mode='sim3'"
-                :class="mode==='sim3'?'bg-gray-900 text-white':'bg-gray-200 text-gray-800'"
-                class="px-4 py-2 rounded">仿真模式3</button>
-        </div>
+        <section class="grid gap-4 rounded-2xl border border-neutral-200 bg-white p-5 md:grid-cols-4">
+            <label v-for="field in inputFields" :key="field.key" class="flex flex-col gap-2">
+                <span class="text-sm font-medium text-neutral-700">{{ field.label }}</span>
+                <input
+                    v-if="field.type === 'number'"
+                    v-model.number="params[field.key]"
+                    type="number"
+                    :min="field.min"
+                    :max="field.max"
+                    :step="field.step || 1"
+                    class="rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-950"
+                >
+                <input
+                    v-else
+                    v-model="params[field.key]"
+                    type="text"
+                    class="rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-950"
+                >
+                <span class="text-xs leading-5 text-neutral-500">{{ field.hint }}</span>
+            </label>
+            <div class="flex items-end gap-3 md:col-span-4">
+                <button
+                    type="button"
+                    class="rounded-xl border border-neutral-300 px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-100"
+                    @click="resetPlan"
+                >
+                    按规则生成年度计划
+                </button>
+                <button
+                    type="button"
+                    class="rounded-xl bg-neutral-950 px-5 py-2 text-sm text-white"
+                    @click="calculate"
+                >
+                    计算结果
+                </button>
+            </div>
+        </section>
 
-        <!-- 基础参数输入 -->
-        <div class="grid grid-cols-4 gap-4 items-end">
-            <div>
-                <label class="block mb-1">年化收益率（%）</label>
-                <input type="number" v-model.number="annualRate" min="0" max="100" class="border p-2 w-full rounded">
-            </div>
-            <div v-if="mode === 'sim1' || mode === 'sim2' || mode === 'sim3'">
-                <label class="block mb-1">年化波动率（%）</label>
-                <input type="number" v-model.number="annualVolatility" min="0" max="100" class="border p-2 w-full rounded">
-            </div>
-            <div v-if="mode === 'sim2' || mode === 'sim3'">
-                <label class="block mb-1">预计通货膨胀率（%）</label>
-                <input type="number" v-model.number="inflationRate" min="0" max="100" class="border p-2 w-full rounded">
-            </div>
-            <div v-if="mode === 'sim2' || mode === 'sim3'">
-                <label class="block mb-1">管理费率（%）</label>
-                <input type="number" v-model.number="managementFee" min="0" max="100" class="border p-2 w-full rounded">
-            </div>
-            <div v-if="mode === 'sim3'">
-                <label class="block mb-1">情绪化交易系数（1-10）</label>
-                <input type="number" v-model.number="behaviorFactor" min="0" max="10" class="border p-2 w-full rounded">
-            </div>
-            <div v-if="mode === 'sim3'">
-                <label class="block mb-1">交易手续费率（%）</label>
-                <input type="number" v-model.number="tradingFee" min="0" max="10" step="0.01" class="border p-2 w-full rounded">
-            </div>
-            <div v-if="mode === 'sim3'">
-                <label class="block mb-1">黑天鹅发生概率（%/年）</label>
-                <input type="number" v-model.number="blackSwanProb" min="0" max="100" class="border p-2 w-full rounded">
-            </div>
-            <div v-if="mode === 'sim3'">
-                <label class="block mb-1">资本利得税率（%）</label>
-                <input type="number" v-model.number="capitalGainsTax" min="0" max="100" class="border p-2 w-full rounded">
-            </div>
-            <div>
-                <label class="block mb-1">投资年限（年）</label>
-                <input type="number" v-model.number="years" min="1" max="50" class="border p-2 w-full rounded">
-            </div>
-            <div>
-                <label class="block mb-1">每月定投最大金额（元）</label>
-                <input type="number" v-model.number="maxMonthly" min="0" class="border p-2 w-full rounded">
-            </div>
-            <div>
-                <label class="block mb-1">首年定投金额（元）</label>
-                <input type="number" v-model.number="firstYearAmount" min="0" class="border p-2 w-full rounded">
-            </div>
-            <div>
-                <label class="block mb-1">定投递增跨度（元）</label>
-                <input type="number" v-model.number="yearlyIncrement" min="0" class="border p-2 w-full rounded">
-            </div>
-            <div class="col-span-4">
-                <button @click="applySettings" class="bg-gray-900 text-white w-full py-2 rounded">{{ mode.startsWith('sim') ? '应用（生成随机真实路径）' : '应用' }}</button>
-            </div>
-        </div>
+        <section v-if="result" class="grid gap-4 md:grid-cols-5">
+            <article
+                v-for="item in primaryMetrics"
+                :key="item.label"
+                class="rounded-2xl border border-neutral-200 bg-white p-5"
+            >
+                <p class="text-sm text-neutral-500">{{ item.label }}</p>
+                <p class="mt-3 text-2xl font-semibold tracking-tight">{{ item.value }}</p>
+                <p class="mt-2 text-xs leading-5 text-neutral-500">{{ item.hint }}</p>
+            </article>
+        </section>
 
-        <!-- 年度投资计划表格（高级模式） -->
-        <div v-if="mode !== 'simple'" class="overflow-x-auto">
-            <table class="min-w-full border border-gray-300 rounded">
-                <thead class="bg-gray-100">
-                    <tr>
-                        <th class="border p-2">年份</th>
-                        <th class="border p-2">当年定投金额（元/月）</th>
-                        <th class="border p-2">当年取款金额（元）</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr v-for="(plan,index) in investmentPlan" :key="index">
-                        <td class="border p-2 text-center">{{ index+1 }}</td>
-                        <td class="border p-2">
-                            <input type="number" v-model.number="plan.invest" :max="maxMonthly" min="0"
-                                class="border p-1 w-full rounded">
-                        </td>
-                        <td class="border p-2">
-                            <input type="number" v-model.number="plan.withdraw" :max="planTotal(index)" min="0"
-                                class="border p-1 w-full rounded">
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
+        <section v-if="result && mode === 'simulation'" class="grid gap-4 md:grid-cols-5">
+            <article
+                v-for="item in distributionMetrics"
+                :key="item.label"
+                class="rounded-2xl border border-neutral-200 bg-white p-5"
+            >
+                <p class="text-sm text-neutral-500">{{ item.label }}</p>
+                <p class="mt-3 text-xl font-semibold tracking-tight">{{ item.value }}</p>
+                <p class="mt-2 text-xs leading-5 text-neutral-500">{{ item.hint }}</p>
+            </article>
+        </section>
 
-        <!-- 计算按钮 -->
-        <div>
-            <button @click="calculate" class="bg-gray-900 text-white px-6 py-2 rounded mt-4">计算收益</button>
-        </div>
+        <section v-if="result" class="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+            <div class="rounded-2xl border border-neutral-200 bg-white p-5">
+                <div class="mb-4 flex items-center justify-between">
+                    <div>
+                        <h2 class="text-lg font-semibold">资产路径</h2>
+                        <p class="mt-1 text-sm text-neutral-500">{{ chartHint }}</p>
+                    </div>
+                </div>
+                <canvas id="chart" class="max-h-[24rem]"></canvas>
+            </div>
 
-        <!-- 核心结果指标 -->
-        <div v-if="calculated" class="grid grid-cols-2 gap-4 mt-6">
-            <div class="border p-4 rounded bg-gray-50">
-                <h3 class="font-bold mb-2">核心指标</h3>
-                <table class="w-full text-left">
-                    <tr>
-                        <td>累计投入本金：</td>
-                        <td>¥{{ totalInvested.toLocaleString() }}</td>
-                    </tr>
-                    <tr>
-                        <td>累计取出金额：</td>
-                        <td>¥{{ totalWithdrawn.toLocaleString() }}</td>
-                    </tr>
-                    <tr>
-                        <td>累计投资收益：</td>
-                        <td>¥{{ totalProfit.toLocaleString() }}</td>
-                    </tr>
-                    <tr>
-                        <td>最终总资产：</td>
-                        <td>¥{{ finalAsset.toLocaleString() }}</td>
-                    </tr>
-                    <tr>
-                        <td>时间加权收益率（TWR）：</td>
-                        <td>{{ twr.toFixed(2) }}%</td>
-                    </tr>
-                    <tr>
-                        <td>资金加权收益率（MWR/IRR）：</td>
-                        <td>{{ mwr.toFixed(2) }}%</td>
-                    </tr>
-                    <tr v-if="mode === 'sim2' || mode === 'sim3'">
-                        <td>通胀调整后购买力：</td>
-                        <td>¥{{ realPurchasingPower.toLocaleString() }}</td>
-                    </tr>
-                    <tr v-if="mode === 'sim3'">
-                        <td>税后最终净收益：</td>
-                        <td>¥{{ afterTaxProfit.toLocaleString() }}</td>
-                    </tr>
+            <div class="rounded-2xl border border-neutral-200 bg-white p-5">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <h2 class="text-lg font-semibold">模型评价</h2>
+                        <p class="mt-1 text-sm text-neutral-500">用于判断本次结果能否作为长期定投参考。</p>
+                    </div>
+                    <div class="rounded-xl border px-3 py-2 text-center" :class="confidenceClass">
+                        <p class="text-xs">置信评级</p>
+                        <p class="text-xl font-semibold">{{ result.confidence.grade }}</p>
+                        <p class="text-xs">{{ result.confidence.score }} / 100</p>
+                    </div>
+                </div>
+                <div class="mt-4 divide-y divide-neutral-100">
+                    <div v-for="item in result.confidence.checks" :key="item.name" class="grid grid-cols-[6rem_1fr] gap-3 py-3 text-sm">
+                        <span class="font-medium" :class="statusClass(item.status)">{{ item.name }}</span>
+                        <span class="leading-6 text-neutral-600">{{ item.detail }}</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="rounded-2xl border border-neutral-200 bg-white p-5">
+            <div class="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold">年度计划</h2>
+                    <p class="mt-1 text-sm text-neutral-500">高级模式和仿真模式2共用同一份现金流计划。</p>
+                </div>
+                <p class="text-sm text-neutral-500">累计计划投入：{{ money(plannedPrincipal) }}</p>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full min-w-[42rem] border-collapse text-sm">
+                    <thead>
+                        <tr class="border-b border-neutral-200 text-left text-neutral-500">
+                            <th class="py-3 pr-3 font-medium">年份</th>
+                            <th class="px-3 py-3 font-medium">每月投入</th>
+                            <th class="px-3 py-3 font-medium">年末取出</th>
+                            <th v-if="result" class="px-3 py-3 font-medium">P10 终值</th>
+                            <th v-if="result" class="px-3 py-3 font-medium">P50 终值</th>
+                            <th v-if="result" class="px-3 py-3 font-medium">P90 终值</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="(row, index) in investmentPlan" :key="index" class="border-b border-neutral-100">
+                            <td class="py-3 pr-3 text-neutral-500">第 {{ index + 1 }} 年</td>
+                            <td class="px-3 py-3">
+                                <input
+                                    v-model.number="row.invest"
+                                    type="number"
+                                    min="0"
+                                    :max="params.maxMonthly"
+                                    class="w-full rounded-lg border border-neutral-200 px-3 py-2 outline-none focus:border-neutral-950"
+                                >
+                            </td>
+                            <td class="px-3 py-3">
+                                <input
+                                    v-model.number="row.withdraw"
+                                    type="number"
+                                    min="0"
+                                    class="w-full rounded-lg border border-neutral-200 px-3 py-2 outline-none focus:border-neutral-950"
+                                >
+                            </td>
+                            <td v-if="result" class="px-3 py-3 text-neutral-600">{{ money(result.yearly[index].p10) }}</td>
+                            <td v-if="result" class="px-3 py-3 font-medium">{{ money(result.yearly[index].median) }}</td>
+                            <td v-if="result" class="px-3 py-3 text-neutral-600">{{ money(result.yearly[index].p90) }}</td>
+                        </tr>
+                    </tbody>
                 </table>
             </div>
-
-            <!-- 折线图 -->
-            <div class="border p-4 rounded bg-gray-50">
-                <canvas id="chart"></canvas>
-            </div>
-        </div>
-
-        <!-- 年度操作影响分解表 -->
-        <div v-if="calculated && mode !== 'simple'" class="overflow-x-auto border rounded p-4 bg-gray-50">
-            <h3 class="font-bold mb-2">年度操作影响分解表</h3>
-            <table class="min-w-full">
-                <thead class="bg-gray-100">
-                    <tr>
-                        <th class="border p-2">年份</th>
-                        <th class="border p-2">年末操作净额（定投-取款）</th>
-                        <th class="border p-2">对最终资产贡献</th>
-                        <th class="border p-2">产生的额外收益</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr v-for="(year,index) in yearImpact" :key="index">
-                        <td class="border p-2 text-center">{{ index+1 }}</td>
-                        <td class="border p-2">¥{{ year.net.toLocaleString() }}</td>
-                        <td class="border p-2">¥{{ year.assetImpact.toLocaleString() }}</td>
-                        <td class="border p-2">¥{{ year.extraProfit.toLocaleString() }}</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-
+        </section>
     </div>
 
     <script>
-        const { createApp } = Vue;
+        const { createApp, computed, nextTick, reactive, ref } = Vue;
 
         createApp({
-            data() {
-                return {
-                    mode: 'advanced', // simple, advanced, sim1, sim2, sim3
-                    annualRate: 8,
-                    annualVolatility: 15,
+            setup() {
+                const modes = [
+                    { label: '高级模式', value: 'advanced' },
+                    { label: '仿真模式2', value: 'simulation' }
+                ];
+                const mode = ref('simulation');
+                const result = ref(null);
+                const investmentPlan = reactive([]);
+                const params = reactive({
+                    annualReturn: 8,
+                    annualVolatility: 20,
                     inflationRate: 3,
                     managementFee: 1,
-                    behaviorFactor: 5,
-                    tradingFee: 0.15,
-                    blackSwanProb: 1.0,
-                    capitalGainsTax: 20,
-                    years: 10,
-                    maxMonthly: 6500,
-                    firstYearAmount: 4000,
-                    yearlyIncrement: 1000,
-                    investmentPlan: [],
-                    calculated: false,
-                    totalInvested: 0,
-                    totalWithdrawn: 0,
-                    totalProfit: 0,
-                    finalAsset: 0,
-                    twr: 0,
-                    mwr: 0,
-                    yearImpact: [],
-                    realPurchasingPower: 0,
-                    afterTaxProfit: 0
-                };
-            },
-            created() {
-                this.initPlan();
-            },
-            methods: {
-                applySettings() {
-                    this.initPlan();
-                    this.calculate();
-                },
-                initPlan() {
-                    this.investmentPlan = Array.from({ length: this.years }, (_, i) => ({
-                        invest: Math.min(this.firstYearAmount + i * this.yearlyIncrement, this.maxMonthly),
-                        withdraw: 0
-                    }));
-                },
-                planTotal(index) {
-                    let total = 0;
-                    for (let i = 0; i <= index; i++) {
-                        total += this.investmentPlan[i].invest * 12;
-                    }
-                    return total;
-                },
-                calculate() {
-                    let planToSimulate = [];
-                    if (this.mode === 'simple') {
-                        planToSimulate = Array.from({ length: this.years }, () => ({
-                            invest: this.maxMonthly,
-                            withdraw: 0
-                        }));
-                    } else {
-                        planToSimulate = this.investmentPlan;
-                    }
+                    transactionFee: 3,
+                    simulations: 2000,
+                    seed: 'sp500',
+                    years: 20,
+                    maxMonthly: 6000,
+                    firstYearAmount: 3000,
+                    yearlyIncrement: 500
+                });
+                let chart = null;
 
-                    let result;
-                    if (this.mode === 'sim2' || this.mode === 'sim3') {
-                        result = this.simulateWithCDN(planToSimulate, this.mode === 'sim3');
-                    } else {
-                        const vol = this.mode === 'sim1' ? this.annualVolatility : 0;
-                        result = window.Calculator.simulateInvestment(
-                            planToSimulate, 
-                            this.annualRate, 
-                            vol
+                const inputFields = computed(() => {
+                    const fields = [
+                        { key: 'annualReturn', label: '年化收益率（%）', type: 'number', min: -50, max: 100, step: 0.1, hint: '按名义 CAGR 输入' },
+                        { key: 'inflationRate', label: '通货膨胀率（%）', type: 'number', min: 0, max: 50, step: 0.1, hint: '用于折算实际购买力' },
+                        { key: 'managementFee', label: '年化管理费（%）', type: 'number', min: 0, max: 10, step: 0.01, hint: '含基金费率、跟踪成本等长期拖累' },
+                        { key: 'transactionFee', label: '场内买入摩擦（%）', type: 'number', min: 0, max: 10, step: 0.1, hint: '按溢价、佣金、价差综合估算，当前可先用 3-5' },
+                        { key: 'years', label: '投资年限（年）', type: 'number', min: 1, max: 50, step: 1, hint: '建议看 10 年以上' },
+                        { key: 'maxMonthly', label: '每月最大投入（元）', type: 'number', min: 0, step: 100, hint: '年度递增后的上限' },
+                        { key: 'firstYearAmount', label: '首年月投入（元）', type: 'number', min: 0, step: 100, hint: '第 1 年每月投入' },
+                        { key: 'yearlyIncrement', label: '年度递增（元）', type: 'number', min: 0, step: 100, hint: '每满一年增加的月投入' }
+                    ];
+                    if (mode.value === 'simulation') {
+                        fields.splice(1, 0, { key: 'annualVolatility', label: '年化波动率（%）', type: 'number', min: 0, max: 100, step: 0.1, hint: 'S&P 500 长期可先用 20 左右' });
+                        fields.push(
+                            { key: 'simulations', label: '模拟路径数', type: 'number', min: 100, max: 10000, step: 100, hint: '2000 条以上结果更稳' },
+                            { key: 'seed', label: '随机种子', type: 'text', hint: '同一参数可复现同一组路径' }
                         );
-                        result.realPurchasingPower = 0;
                     }
+                    return fields;
+                });
 
-                    this.totalInvested = result.totalInvested;
-                    this.totalWithdrawn = result.totalWithdrawn;
-                    this.totalProfit = result.totalProfit;
-                    this.finalAsset = result.finalAsset;
-                    this.twr = result.twr;
-                    this.mwr = result.mwr;
-                    this.yearImpact = result.yearImpact;
-                    this.realPurchasingPower = result.realPurchasingPower;
-                    this.afterTaxProfit = result.afterTaxProfit || 0;
+                const plannedPrincipal = computed(() => {
+                    return investmentPlan.reduce((sum, row) => sum + Number(row.invest || 0) * 12, 0);
+                });
 
-                    this.calculated = true;
-                    this.$nextTick(() => {
-                        this.renderChart();
-                    });
-                },
-                simulateWithCDN(plan, isSim3 = false) {
-                    const finance = new Finance();
-                    const rateDec = this.annualRate / 100;
-                    const volDec = this.annualVolatility / 100;
-                    const inflationDec = this.inflationRate / 100;
-                    const feeDec = this.managementFee / 100;
+                const primaryMetrics = computed(() => {
+                    if (!result.value) return [];
+                    const summary = result.value.summary;
+                    return [
+                        { label: '预计终值', value: money(summary.finalAsset), hint: mode.value === 'simulation' ? '蒙特卡洛中位数 P50' : '确定性路径终值' },
+                        { label: '实际购买力', value: money(summary.realPurchasingPower), hint: `按 ${params.inflationRate}% 年通胀折现` },
+                        { label: '累计投入', value: money(summary.totalInvested), hint: '仅统计计划本金' },
+                        { label: '累计摩擦', value: money(summary.totalTradeCost), hint: '已计入 MWR 和总收益' },
+                        { label: '资金加权收益率', value: percent(summary.mwr), hint: '按月现金流 IRR 年化' }
+                    ];
+                });
 
-                    const monthlyExpectedReturn = rateDec / 12;
-                    const monthlyVolatility = volDec / Math.sqrt(12);
-                    const monthlyFee = feeDec / 12;
+                const distributionMetrics = computed(() => {
+                    if (!result.value || !result.value.distribution) return [];
+                    const item = result.value.distribution;
+                    return [
+                        { label: '保守 P10', value: money(item.finalAsset.p10), hint: '九成路径高于该终值' },
+                        { label: '中位 P50', value: money(item.finalAsset.median), hint: '最适合作为正常情形锚点' },
+                        { label: '乐观 P90', value: money(item.finalAsset.p90), hint: '一成路径高于该终值' },
+                        { label: '盈利概率', value: percent(item.profitProbability), hint: '终值加取出金额高于本金' },
+                        { label: '实际跑赢成本概率', value: percent(item.realPrincipalProbability), hint: '扣通胀后终值高于累计现金支出' }
+                    ];
+                });
 
-                    const bFactor = this.behaviorFactor;
-                    const greedMultiplier = bFactor; 
-                    const fearMultiplier = bFactor * 2; 
-                    const panicThreshold = -0.05; 
-                    const panicSellRate = (bFactor / 10) * 0.1; 
+                const chartHint = computed(() => {
+                    return mode.value === 'simulation'
+                        ? '展示一条按随机种子固定的月度代表路径，能看到波动；分位数看卡片和年表。'
+                        : '展示确定性月度路径，用于和仿真模式2做基准对照。';
+                });
 
-                    const tFee = this.tradingFee / 100;
-                    const bsProb = this.blackSwanProb / 100 / 12; 
-                    const cgTax = this.capitalGainsTax / 100;
+                const confidenceClass = computed(() => {
+                    if (!result.value) return '';
+                    if (result.value.confidence.grade === '高') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+                    if (result.value.confidence.grade === '中') return 'border-amber-200 bg-amber-50 text-amber-700';
+                    return 'border-red-200 bg-red-50 text-red-700';
+                });
 
-                    let totalAsset = 0;
-                    let cashFlows = [];
-                    const yearImpact = [];
-                    let twrFactor = 1.0;
-                    let prevMonthReturn = 0;
-
-                    for (let i = 0; i < plan.length; i++) {
-                        const baseMonthlyInvest = plan[i].invest;
-                        const withdrawYear = plan[i].withdraw;
-                        
-                        let asset = totalAsset;
-                        const startOfYearAsset = asset;
-                        let yearlyActualInvest = 0;
-
-                        for (let m = 0; m < 12; m++) {
-                            let actualMonthlyRate = monthlyExpectedReturn;
-                            
-                            if (isSim3 && Math.random() < bsProb) {
-                                actualMonthlyRate = -0.20 + (Math.random() * 0.05);
-                            } else if (volDec > 0 && typeof jStat !== 'undefined') {
-                                actualMonthlyRate = jStat.normal.sample(monthlyExpectedReturn, monthlyVolatility);
-                            }
-                            
-                            actualMonthlyRate -= monthlyFee;
-
-                            let currentInvest = baseMonthlyInvest;
-                            if (isSim3) {
-                                if (prevMonthReturn > 0) {
-                                    currentInvest *= (1 + prevMonthReturn * greedMultiplier);
-                                } else if (prevMonthReturn < 0) {
-                                    currentInvest *= (1 + prevMonthReturn * fearMultiplier);
-                                    if (currentInvest < 0) currentInvest = 0;
-                                }
-                                currentInvest = Math.min(currentInvest, baseMonthlyInvest * 2);
-                            }
-
-                            asset = asset * (1 + actualMonthlyRate);
-                            twrFactor *= (1 + actualMonthlyRate);
-                            
-                            let feeIncurred = 0;
-                            if (isSim3 && currentInvest > 0) {
-                                feeIncurred += currentInvest * tFee;
-                                asset += (currentInvest - feeIncurred);
-                            } else {
-                                asset += currentInvest;
-                            }
-                            yearlyActualInvest += currentInvest;
-
-                            if (isSim3 && prevMonthReturn < panicThreshold && asset > 0) {
-                                const sellAmount = asset * panicSellRate;
-                                asset -= sellAmount;
-                                feeIncurred += sellAmount * tFee;
-                                yearlyActualInvest -= (sellAmount - feeIncurred);
-                            }
-
-                            prevMonthReturn = actualMonthlyRate;
-                        }
-
-                        asset -= withdrawYear;
-
-                        const net = yearlyActualInvest - withdrawYear;
-                        const extraProfit = asset - startOfYearAsset - net;
-
-                        yearImpact.push({
-                            net: net,
-                            assetImpact: net + extraProfit,
-                            extraProfit: extraProfit
-                        });
-
-                        cashFlows.push(-yearlyActualInvest);
-                        if (withdrawYear > 0) cashFlows.push(withdrawYear);
-
-                        totalAsset = asset;
-                    }
-
-                    const years = plan.length;
-                    let annualizedTWR = 0;
-                    if (years > 0) {
-                         annualizedTWR = (Math.pow(twrFactor, 1 / years) - 1) * 100;
-                    }
-
-                    let mwr = 0;
-                    try {
-                        const irrCashFlows = [...cashFlows, totalAsset];
-                        const initial = irrCashFlows.shift(); 
-                        mwr = finance.IRR(initial, ...irrCashFlows);
-                    } catch (e) {
-                        mwr = 0;
-                    }
-
-                    const totalInvested = -cashFlows.filter(c => c < 0).reduce((sum, c) => sum + c, 0);
-                    const totalWithdrawn = cashFlows.filter(c => c > 0).reduce((sum, c) => sum + c, 0);
-                    const realAsset = totalAsset / Math.pow(1 + inflationDec, years);
-                    const totalProfit = totalAsset - totalInvested + totalWithdrawn;
-                    
-                    let afterTaxProfit = totalProfit;
-                    if (isSim3 && totalProfit > 0) {
-                        afterTaxProfit = totalProfit * (1 - cgTax);
-                    }
-
-                    return {
-                        totalInvested,
-                        totalWithdrawn,
-                        totalProfit,
-                        finalAsset: totalAsset,
-                        yearImpact: yearImpact,
-                        twr: annualizedTWR,
-                        mwr: mwr || 0,
-                        realPurchasingPower: realAsset,
-                        afterTaxProfit
-                    };
-                },
-                    renderChart(){
-                        const labels = Array.from({ length: this.years }, (_, i) => `第${i + 1}年`);
-                        const profitData = this.yearImpact.map(y => y.extraProfit);
-                        const totalData = [];
-                        let acc = 0;
-                        for (let i = 0; i < this.years; i++) {
-                            acc += this.yearImpact[i].assetImpact;
-                            totalData.push(acc);
-                        }
-
-                        const ctx = document.getElementById('chart').getContext('2d');
-                        if (this.chart) this.chart.destroy();
-                        this.chart = new Chart(ctx, {
-                            type: 'line',
-                            data: {
-                                labels,
-                                datasets: [
-                                    { label: '年度额外收益', data: profitData, borderColor: 'blue', backgroundColor: 'rgba(0,0,255,0.1)', tension: 0.3 },
-                                    { label: '总资产', data: totalData, borderColor: 'purple', backgroundColor: 'rgba(128,0,128,0.1)', tension: 0.3 }
-                                ]
-                            },
-                            options: {
-                                responsive: true,
-                                plugins: {
-                                    legend: { position: 'top' }
-                                },
-                                scales: {
-                                    y: { beginAtZero: true }
-                                }
-                            }
-                        });
-                    }
+                function resetPlan() {
+                    const years = Math.max(Math.floor(Number(params.years || 1)), 1);
+                    investmentPlan.splice(0, investmentPlan.length, ...Array.from({ length: years }, (_, index) => ({
+                        invest: Math.min(Number(params.firstYearAmount || 0) + index * Number(params.yearlyIncrement || 0), Number(params.maxMonthly || 0)),
+                        withdraw: 0
+                    })));
+                    result.value = null;
+                    renderChart();
                 }
-            }).mount('#app');
+
+                function setMode(value) {
+                    mode.value = value;
+                    calculate();
+                }
+
+                function calculate() {
+                    const options = {
+                        annualReturn: params.annualReturn,
+                        annualVolatility: params.annualVolatility,
+                        inflationRate: params.inflationRate,
+                        managementFee: params.managementFee,
+                        transactionFee: params.transactionFee,
+                        simulations: params.simulations,
+                        seed: params.seed
+                    };
+                    result.value = mode.value === 'simulation'
+                        ? window.Calculator.calculateSimulation(investmentPlan, options)
+                        : window.Calculator.calculateDeterministic(investmentPlan, options);
+                    nextTick(renderChart);
+                }
+
+                function renderChart() {
+                    const canvas = document.getElementById('chart');
+                    if (!canvas) return;
+                    if (chart) {
+                        chart.destroy();
+                        chart = null;
+                    }
+                    if (!result.value) return;
+
+                    const timeline = result.value.timeline || [];
+                    const labels = timeline.map((item) => item.month);
+                    const datasets = [
+                        {
+                            label: mode.value === 'simulation' ? '月度代表路径' : '确定性月度路径',
+                            data: timeline.map((item) => round(item.asset)),
+                            borderColor: '#171717',
+                            backgroundColor: 'rgba(23,23,23,0.08)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0
+                        }
+                    ];
+
+                    chart = new Chart(canvas.getContext('2d'), {
+                        type: 'line',
+                        data: { labels, datasets },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: { legend: { position: 'bottom' } },
+                            scales: {
+                                x: {
+                                    ticks: {
+                                        autoSkip: true,
+                                        maxTicksLimit: 12,
+                                        callback(value) {
+                                            const month = Number(this.getLabelForValue(value));
+                                            return Number.isFinite(month) ? `第 ${Math.ceil(month / 12)} 年` : '';
+                                        }
+                                    }
+                                },
+                                y: {
+                                    ticks: {
+                                        callback(value) {
+                                            return money(value);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                function money(value) {
+                    if (!Number.isFinite(Number(value))) return '无有效值';
+                    const amount = Number(value);
+                    const abs = Math.abs(amount);
+                    if (abs >= 100000000) return `¥${(amount / 100000000).toFixed(2)}亿`;
+                    if (abs >= 10000) return `¥${(amount / 10000).toFixed(2)}万`;
+                    return `¥${Math.round(amount).toLocaleString('zh-CN')}`;
+                }
+
+                function percent(value) {
+                    if (value === null || !Number.isFinite(Number(value))) return '无有效解';
+                    return `${(Number(value) * 100).toFixed(2)}%`;
+                }
+
+                function round(value) {
+                    return window.Calculator.round(value, 2);
+                }
+
+                function statusClass(status) {
+                    if (status === 'pass') return 'text-emerald-700';
+                    if (status === 'warn') return 'text-amber-700';
+                    return 'text-red-700';
+                }
+
+                resetPlan();
+                calculate();
+
+                return {
+                    modes,
+                    mode,
+                    params,
+                    result,
+                    investmentPlan,
+                    inputFields,
+                    plannedPrincipal,
+                    primaryMetrics,
+                    distributionMetrics,
+                    chartHint,
+                    confidenceClass,
+                    resetPlan,
+                    setMode,
+                    calculate,
+                    money,
+                    percent,
+                    statusClass
+                };
+            }
+        }).mount('#app');
     </script>
 </body>
 
