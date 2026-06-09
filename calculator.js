@@ -1,5 +1,6 @@
 (() => {
     const MONTHS_PER_YEAR = 12;
+    const DEFAULT_START = '1957-01';
 
     function toRate(value) {
         return Number(value || 0) / 100;
@@ -16,7 +17,7 @@
 
     function hashSeed(seed) {
         let h = 2166136261;
-        const text = String(seed || 'dca');
+        const text = String(seed || 'sp500');
         for (let i = 0; i < text.length; i++) {
             h ^= text.charCodeAt(i);
             h = Math.imul(h, 16777619);
@@ -35,14 +36,6 @@
         };
     }
 
-    function normalRandom(rng) {
-        let u = 0;
-        let v = 0;
-        while (u === 0) u = rng();
-        while (v === 0) v = rng();
-        return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-    }
-
     function percentile(sortedValues, p) {
         if (!sortedValues.length) return 0;
         const index = (sortedValues.length - 1) * p;
@@ -53,17 +46,15 @@
     }
 
     function summarize(values) {
-        const sorted = values.slice().sort((a, b) => a - b);
+        const sorted = values.filter(Number.isFinite).slice().sort((a, b) => a - b);
         const mean = sorted.reduce((sum, value) => sum + value, 0) / Math.max(sorted.length, 1);
         return {
             min: sorted[0] || 0,
-            p5: percentile(sorted, 0.05),
             p10: percentile(sorted, 0.1),
             p25: percentile(sorted, 0.25),
             median: percentile(sorted, 0.5),
             p75: percentile(sorted, 0.75),
             p90: percentile(sorted, 0.9),
-            p95: percentile(sorted, 0.95),
             max: sorted[sorted.length - 1] || 0,
             mean
         };
@@ -76,27 +67,63 @@
         }));
     }
 
-    function buildOptions(inputOptions) {
+    function getMarketData() {
+        const source = window.SP500_SHILLER_MONTHLY || { monthly: [] };
+        const monthly = source.monthly
+            .filter((item) => Number.isFinite(item.nominalReturn))
+            .map((item) => ({
+                date: item.date,
+                nominalReturn: Number(item.nominalReturn),
+                realReturn: Number(item.realReturn),
+                cpi: Number(item.cpi)
+            }));
+        return { ...source, monthly };
+    }
+
+    function getDataMeta() {
+        const data = getMarketData();
         return {
-            annualReturn: toRate(inputOptions.annualReturn),
-            annualVolatility: toRate(inputOptions.annualVolatility),
-            inflationRate: toRate(inputOptions.inflationRate),
-            managementFee: toRate(inputOptions.managementFee),
-            transactionFee: toRate(inputOptions.transactionFee),
-            simulations: clamp(Math.floor(Number(inputOptions.simulations || 2000)), 100, 10000),
-            seed: inputOptions.seed || 'sp500'
+            source: data.source || '',
+            downloadedAt: data.downloadedAt || '',
+            start: data.start || '',
+            end: data.end || '',
+            rows: data.rows || 0
         };
     }
 
-    function deterministicMonthlyReturn(options) {
-        return Math.expm1((Math.log1p(options.annualReturn) - options.managementFee) / MONTHS_PER_YEAR);
+    function buildOptions(inputOptions) {
+        const data = getMarketData();
+        return {
+            annualReturn: toRate(inputOptions.annualReturn),
+            inflationRate: toRate(inputOptions.inflationRate),
+            managementFee: toRate(inputOptions.managementFee),
+            transactionFee: toRate(inputOptions.transactionFee),
+            simulations: clamp(Math.floor(Number(inputOptions.simulations || 2000)), 200, 10000),
+            seed: inputOptions.seed || 'sp500',
+            historyStart: inputOptions.historyStart || DEFAULT_START,
+            historyEnd: inputOptions.historyEnd || data.end,
+            returnAdjustment: toRate(inputOptions.returnAdjustment),
+            data
+        };
     }
 
-    function randomMonthlyReturn(options, rng) {
-        const monthlyVolatility = options.annualVolatility / Math.sqrt(MONTHS_PER_YEAR);
-        const monthlyLogMean = (Math.log1p(options.annualReturn) - options.managementFee) / MONTHS_PER_YEAR
-            - (monthlyVolatility ** 2) / 2;
-        return Math.expm1(monthlyLogMean + monthlyVolatility * normalRandom(rng));
+    function filterMonthlyReturns(options) {
+        return options.data.monthly.filter((item) => {
+            return item.date >= options.historyStart && item.date <= options.historyEnd;
+        });
+    }
+
+    function netMonthlyReturn(marketReturn, options) {
+        return ((1 + marketReturn) * Math.exp(-options.managementFee / MONTHS_PER_YEAR)) - 1;
+    }
+
+    function adjustedMonthlyReturn(marketReturn, options) {
+        const monthlyAdjustment = Math.expm1(Math.log1p(options.returnAdjustment) / MONTHS_PER_YEAR);
+        return ((1 + marketReturn) * (1 + monthlyAdjustment)) - 1;
+    }
+
+    function deterministicMonthlyReturn(options) {
+        return Math.expm1(Math.log1p(options.annualReturn) / MONTHS_PER_YEAR);
     }
 
     function solveMonthlyIrr(flows) {
@@ -107,8 +134,8 @@
         const npv = (rate) => flows.reduce((sum, flow) => {
             return sum + flow.amount / ((1 + rate) ** flow.month);
         }, 0);
+        const candidates = [-0.9999, -0.95, -0.75, -0.5, -0.25, -0.1, -0.05, -0.02, -0.01, 0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5];
 
-        const candidates = [-0.9999, -0.99, -0.95, -0.9, -0.75, -0.5, -0.25, -0.1, -0.05, -0.02, -0.01, 0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
         for (let i = 0; i < candidates.length - 1; i++) {
             let low = candidates[i];
             let high = candidates[i + 1];
@@ -142,7 +169,7 @@
         return ((1 + monthlyRate) ** MONTHS_PER_YEAR) - 1;
     }
 
-    function simulatePath(plan, options, monthlyReturnFactory) {
+    function simulatePath(plan, options, monthlyMarketReturnFactory, label = '') {
         const cashFlows = [];
         const yearly = [];
         const monthly = [];
@@ -151,7 +178,8 @@
         let totalInvested = 0;
         let totalWithdrawn = 0;
         let totalTradeCost = 0;
-        let twrFactor = 1;
+        let maxAsset = 0;
+        let maxDrawdown = 0;
 
         for (let year = 0; year < plan.length; year++) {
             const startAsset = asset;
@@ -163,27 +191,36 @@
                 const invest = plan[year].invest;
                 const netInvest = invest / (1 + options.transactionFee);
                 const tradeCost = invest - netInvest;
-                const monthlyReturn = monthlyReturnFactory(month);
+                const marketReturn = monthlyMarketReturnFactory(month);
 
-                totalTradeCost += tradeCost;
-                yearlyTradeCost += tradeCost;
                 totalInvested += invest;
                 invested += invest;
+                totalTradeCost += tradeCost;
+                yearlyTradeCost += tradeCost;
                 asset += netInvest;
                 cashFlows.push({ month, amount: -invest });
 
-                asset *= 1 + monthlyReturn;
-                twrFactor *= 1 + monthlyReturn;
-                monthly.push({ month: month + 1, asset });
+                asset *= 1 + netMonthlyReturn(marketReturn, options);
+                maxAsset = Math.max(maxAsset, asset);
+                maxDrawdown = maxAsset > 0 ? Math.min(maxDrawdown, asset / maxAsset - 1) : 0;
+                monthly.push({
+                    month: month + 1,
+                    year: Math.ceil((month + 1) / MONTHS_PER_YEAR),
+                    asset,
+                    principal: totalInvested - totalWithdrawn,
+                    profit: asset + totalWithdrawn - totalInvested,
+                    realAsset: asset / ((1 + options.inflationRate) ** ((month + 1) / MONTHS_PER_YEAR))
+                });
             }
 
-            const requestedWithdraw = plan[year].withdraw;
-            const withdrawn = Math.min(requestedWithdraw, Math.max(asset, 0));
+            const withdrawn = Math.min(plan[year].withdraw, Math.max(asset, 0));
             asset -= withdrawn;
             totalWithdrawn += withdrawn;
             if (withdrawn > 0) {
                 cashFlows.push({ month: (year + 1) * MONTHS_PER_YEAR, amount: withdrawn });
                 monthly[monthly.length - 1].asset = asset;
+                monthly[monthly.length - 1].principal = totalInvested - totalWithdrawn;
+                monthly[monthly.length - 1].profit = asset + totalWithdrawn - totalInvested;
             }
 
             yearly.push({
@@ -193,27 +230,25 @@
                 tradeCost: yearlyTradeCost,
                 withdrawn,
                 endAsset: asset,
-                profit: asset - startAsset - invested + withdrawn
+                principal: totalInvested - totalWithdrawn,
+                profit: asset + totalWithdrawn - totalInvested,
+                realAsset: asset / ((1 + options.inflationRate) ** (year + 1))
             });
         }
 
         cashFlows.push({ month: totalMonths, amount: asset });
-        const monthlyIrr = solveMonthlyIrr(cashFlows);
-        const mwr = annualizeMonthlyRate(monthlyIrr);
+        const mwr = annualizeMonthlyRate(solveMonthlyIrr(cashFlows));
         const years = Math.max(plan.length, 1);
-        const totalCashOutlay = totalInvested;
-        const totalProfit = asset + totalWithdrawn - totalInvested;
-
         return {
+            label,
             totalInvested,
             totalWithdrawn,
             totalTradeCost,
-            totalCashOutlay,
-            totalProfit,
+            totalProfit: asset + totalWithdrawn - totalInvested,
             finalAsset: asset,
             realPurchasingPower: asset / ((1 + options.inflationRate) ** years),
-            twr: (twrFactor ** (1 / years)) - 1,
             mwr,
+            maxDrawdown,
             yearly,
             monthly
         };
@@ -221,182 +256,124 @@
 
     function summarizeYears(paths, years) {
         return Array.from({ length: years }, (_, yearIndex) => {
-            const values = paths.map((path) => path.yearly[yearIndex].endAsset);
-            const realValues = paths.map((path) => {
-                return path.yearly[yearIndex].endAsset / ((1 + path.options.inflationRate) ** (yearIndex + 1));
-            });
+            const endAsset = paths.map((path) => path.yearly[yearIndex].endAsset);
+            const principal = paths.map((path) => path.yearly[yearIndex].principal);
+            const profit = paths.map((path) => path.yearly[yearIndex].profit);
+            const realAsset = paths.map((path) => path.yearly[yearIndex].realAsset);
             return {
                 year: yearIndex + 1,
-                nominal: summarize(values),
-                real: summarize(realValues)
+                endAsset: summarize(endAsset),
+                principal: summarize(principal),
+                profit: summarize(profit),
+                realAsset: summarize(realAsset)
             };
         });
     }
 
-    function buildConfidenceReport({ mode, plan, options, result }) {
-        const checks = [];
-        const addCheck = (name, status, weight, detail) => {
-            checks.push({ name, status, weight, detail });
-        };
-
-        const totalInvest = plan.reduce((sum, item) => sum + item.invest * MONTHS_PER_YEAR, 0);
-        const hasCashFlow = totalInvest > 0;
-        const distribution = result.distribution;
-        const dispersion = distribution && distribution.finalAsset.median > 0
-            ? distribution.finalAsset.p10 / distribution.finalAsset.median
-            : 1;
-        const sampleError = distribution && distribution.finalAsset.mean > 0
-            ? result.standardError / distribution.finalAsset.mean
-            : 0;
-
-        addCheck(
-            '现金流有效性',
-            hasCashFlow ? 'pass' : 'fail',
-            25,
-            hasCashFlow ? '存在持续投入，现金流可计算' : '累计投入为 0，结果没有投资含义'
-        );
-        addCheck(
-            '成本口径',
-            options.managementFee > 0 || options.transactionFee > 0 ? 'pass' : 'warn',
-            15,
-            options.managementFee > 0 || options.transactionFee > 0
-                ? '已计入年化管理费或场内买入摩擦'
-                : '未计入任何费用，长期终值会偏乐观'
-        );
-        addCheck(
-            '通胀口径',
-            options.inflationRate > 0 ? 'pass' : 'warn',
-            15,
-            options.inflationRate > 0 ? '已输出实际购买力' : '通胀为 0，购买力结果偏名义'
-        );
-
-        if (mode === 'simulation') {
-            addCheck(
-                '样本量',
-                options.simulations >= 2000 ? 'pass' : options.simulations >= 1000 ? 'warn' : 'fail',
-                20,
-                `${options.simulations} 条路径`
-            );
-            addCheck(
-                '波动输入',
-                options.annualVolatility > 0 ? 'pass' : 'fail',
-                15,
-                options.annualVolatility > 0 ? '已使用年化波动率生成收益分布' : '波动率为 0，仿真退化为确定性计算'
-            );
-            addCheck(
-                '抽样稳定性',
-                sampleError <= 0.015 ? 'pass' : sampleError <= 0.03 ? 'warn' : 'fail',
-                10,
-                `终值均值标准误约 ${round(sampleError * 100, 2)}%`
-            );
-            addCheck(
-                '结果离散度',
-                dispersion >= 0.6 ? 'pass' : dispersion >= 0.4 ? 'warn' : 'fail',
-                10,
-                `P10/中位数约 ${round(dispersion * 100, 1)}%`
-            );
-        } else {
-            addCheck('路径覆盖', 'warn', 20, '高级模式只展示单一路径，不能衡量极端年份');
-        }
-
-        const score = checks.reduce((sum, check) => {
-            if (check.status === 'pass') return sum + check.weight;
-            if (check.status === 'warn') return sum + check.weight * 0.55;
-            return sum;
-        }, 0);
-        const maxScore = checks.reduce((sum, check) => sum + check.weight, 0);
-        const normalizedScore = maxScore ? Math.round((score / maxScore) * 100) : 0;
-
-        return {
-            score: normalizedScore,
-            grade: normalizedScore >= 85 ? '高' : normalizedScore >= 65 ? '中' : '低',
-            checks
-        };
-    }
-
-    function calculateDeterministic(inputPlan, inputOptions) {
-        const plan = buildPlan(inputPlan);
-        const options = buildOptions(inputOptions);
-        const monthlyReturn = deterministicMonthlyReturn(options);
-        const path = simulatePath(plan, options, () => monthlyReturn);
-        const result = {
-            mode: 'advanced',
-            options,
-            summary: path,
-            timeline: path.monthly,
-            yearly: path.yearly.map((item) => ({
-                year: item.year,
-                p10: item.endAsset,
-                median: item.endAsset,
-                p90: item.endAsset,
-                realMedian: item.endAsset / ((1 + options.inflationRate) ** item.year)
-            })),
-            distribution: null
-        };
-        result.confidence = buildConfidenceReport({ mode: 'advanced', plan, options, result });
-        return result;
-    }
-
-    function calculateSimulation(inputPlan, inputOptions) {
-        const plan = buildPlan(inputPlan);
-        const options = buildOptions(inputOptions);
-        const paths = Array.from({ length: options.simulations }, (_, index) => {
-            const rng = createRng(`${options.seed}:${index}`);
-            const path = simulatePath(plan, options, () => randomMonthlyReturn(options, rng));
-            path.options = options;
-            return path;
-        });
+    function buildDistribution(paths) {
         const finalAssets = paths.map((path) => path.finalAsset);
         const realAssets = paths.map((path) => path.realPurchasingPower);
         const profits = paths.map((path) => path.totalProfit);
         const mwrs = paths.map((path) => path.mwr).filter((value) => value !== null && Number.isFinite(value));
-        const finalDistribution = summarize(finalAssets);
-        const mean = finalDistribution.mean;
-        const variance = finalAssets.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / Math.max(finalAssets.length - 1, 1);
-        const standardError = Math.sqrt(variance) / Math.sqrt(finalAssets.length);
-        const representative = paths.reduce((closest, path) => {
-            return Math.abs(path.finalAsset - finalDistribution.median) < Math.abs(closest.finalAsset - finalDistribution.median)
+        const drawdowns = paths.map((path) => path.maxDrawdown);
+        const finalAsset = summarize(finalAssets);
+        return {
+            finalAsset,
+            realPurchasingPower: summarize(realAssets),
+            totalProfit: summarize(profits),
+            mwr: mwrs.length ? summarize(mwrs) : null,
+            maxDrawdown: summarize(drawdowns),
+            profitProbability: paths.filter((path) => path.totalProfit > 0).length / paths.length,
+            realPrincipalProbability: paths.filter((path) => path.realPurchasingPower > path.totalInvested - path.totalWithdrawn).length / paths.length
+        };
+    }
+
+    function representativePath(paths, target) {
+        return paths.reduce((closest, path) => {
+            return Math.abs(path.finalAsset - target) < Math.abs(closest.finalAsset - target)
                 ? path
                 : closest;
         }, paths[0]);
+    }
 
+    function buildResult(mode, plan, options, paths, modelInfo) {
+        const distribution = buildDistribution(paths);
+        const representative = representativePath(paths, distribution.finalAsset.median);
         const summary = {
             ...representative,
-            finalAsset: finalDistribution.median,
-            realPurchasingPower: summarize(realAssets).median,
-            totalProfit: summarize(profits).median,
-            mwr: mwrs.length ? summarize(mwrs).median : null
+            finalAsset: distribution.finalAsset.median,
+            realPurchasingPower: distribution.realPurchasingPower.median,
+            totalProfit: distribution.totalProfit.median,
+            mwr: distribution.mwr ? distribution.mwr.median : null,
+            maxDrawdown: distribution.maxDrawdown.median
         };
 
-        const result = {
-            mode: 'simulation',
+        return {
+            mode,
             options,
             summary,
             timeline: representative.monthly,
-            distribution: {
-                finalAsset: finalDistribution,
-                realPurchasingPower: summarize(realAssets),
-                totalProfit: summarize(profits),
-                mwr: mwrs.length ? summarize(mwrs) : null,
-                profitProbability: paths.filter((path) => path.totalProfit > 0).length / paths.length,
-                realPrincipalProbability: paths.filter((path) => path.realPurchasingPower > path.totalCashOutlay).length / paths.length
-            },
-            yearly: summarizeYears(paths, plan.length).map((item) => ({
-                year: item.year,
-                p10: item.nominal.p10,
-                median: item.nominal.median,
-                p90: item.nominal.p90,
-                realMedian: item.real.median
-            })),
-            standardError
+            distribution,
+            yearly: summarizeYears(paths, plan.length),
+            modelInfo
         };
-        result.confidence = buildConfidenceReport({ mode: 'simulation', plan, options, result });
-        return result;
+    }
+
+    function calculateFixed(inputPlan, inputOptions) {
+        const plan = buildPlan(inputPlan);
+        const options = buildOptions(inputOptions);
+        const monthlyReturn = deterministicMonthlyReturn(options);
+        const path = simulatePath(plan, options, () => monthlyReturn, '固定收益');
+        return buildResult('fixed', plan, options, [path], {
+            title: '固定收益测算',
+            detail: '每月使用同一个年化收益率折算后的月收益，不模拟市场波动。'
+        });
+    }
+
+    function calculateRandom(inputPlan, inputOptions) {
+        const plan = buildPlan(inputPlan);
+        const options = buildOptions(inputOptions);
+        const pool = filterMonthlyReturns(options);
+        const paths = Array.from({ length: options.simulations }, (_, index) => {
+            const rng = createRng(`${options.seed}:${index}`);
+            return simulatePath(plan, options, () => {
+                const sample = pool[Math.floor(rng() * pool.length)];
+                return adjustedMonthlyReturn(sample.nominalReturn, options);
+            }, `随机路径 ${index + 1}`);
+        });
+        return buildResult('random', plan, options, paths, {
+            title: '随机市场模拟',
+            detail: `从 ${options.historyStart} 到 ${options.historyEnd} 的历史月度总回报中随机抽样，生成 ${options.simulations} 条未来路径。`,
+            sampleCount: pool.length
+        });
+    }
+
+    function calculateHistory(inputPlan, inputOptions) {
+        const plan = buildPlan(inputPlan);
+        const options = buildOptions(inputOptions);
+        const pool = filterMonthlyReturns(options);
+        const totalMonths = plan.length * MONTHS_PER_YEAR;
+        const windows = Math.max(pool.length - totalMonths + 1, 0);
+        const paths = Array.from({ length: windows }, (_, startIndex) => {
+            const start = pool[startIndex];
+            const end = pool[startIndex + totalMonths - 1];
+            return simulatePath(plan, options, (month) => {
+                return adjustedMonthlyReturn(pool[startIndex + month].nominalReturn, options);
+            }, `${start.date} 至 ${end.date}`);
+        });
+        return buildResult('history', plan, options, paths, {
+            title: '历史区间参考',
+            detail: `遍历 ${options.historyStart} 到 ${options.historyEnd} 中所有连续 ${plan.length} 年窗口，共 ${windows} 段。`,
+            sampleCount: pool.length,
+            windows
+        });
     }
 
     window.Calculator = {
-        calculateDeterministic,
-        calculateSimulation,
+        calculateFixed,
+        calculateRandom,
+        calculateHistory,
+        getDataMeta,
         round
     };
 })();
